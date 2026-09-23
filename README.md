@@ -42,6 +42,9 @@ The baud rate must match the bootloader, not the sketch. Common values:
 | Nano, old bootloader | 57600 |
 | MiniCore urboot | whatever you picked in the board menu, usually 115200 |
 
+If no valid reply comes back at the given baud, it resets the board and tries
+again at 57600, so old-bootloader Nanos work with the default 115200.
+
 ## Limitations
 
 - ATmega328P and ATmega328PB only (signature / MCU id is checked).

@@ -57,25 +57,26 @@ func Update(port string, baud int, firmwareHex []byte, cb func(format string, va
 	// (~1s) bootloader window without overshooting it.
 	p.SetReadTimeout(200 * time.Millisecond)
 
-	// Arduino auto-reset: the reset cap triggers on the falling edge of DTR,
-	// so assert high first to guarantee a clean high->low->high pulse
-	// regardless of the line state the driver left on open.
-	p.SetDTR(true)
-	p.SetRTS(true)
-	time.Sleep(50 * time.Millisecond)
-	p.SetDTR(false)
-	p.SetRTS(false)
-	time.Sleep(250 * time.Millisecond)
-	p.SetDTR(true)
-	p.SetRTS(true)
-	time.Sleep(50 * time.Millisecond)
-	p.ResetInputBuffer()
-
 	pr := &programmer{p: p}
 
-	cb("%s", "Syncing with bootloader ...")
-	if err := pr.sync(); err != nil {
-		return err
+	// Old-bootloader Nanos (ATmegaBOOT) run at 57600. Their replies read at
+	// 115200 are consistent junk, so sync rejects them and we retry slower.
+	bauds := []int{baud}
+	if baud != 57600 {
+		bauds = append(bauds, 57600)
+	}
+	for i, b := range bauds {
+		if err := p.SetMode(&serial.Mode{BaudRate: b}); err != nil {
+			return err
+		}
+		resetBoard(p)
+		cb("Syncing with bootloader at %d baud ...", b)
+		if err = pr.sync(); err == nil {
+			break
+		}
+		if i == len(bauds)-1 {
+			return err
+		}
 	}
 	start := time.Now()
 	if pr.insync == stkInsync && pr.ok == stkOK {
@@ -116,7 +117,7 @@ func (pr *programmer) sync() error {
 			seen = false
 			continue // timeout/no data/garbage, try again
 		}
-		if seen && resp[0] == last[0] && resp[1] == last[1] {
+		if seen && resp[0] == last[0] && resp[1] == last[1] && validAck(resp[0], resp[1]) {
 			pr.insync, pr.ok = resp[0], resp[1]
 			return nil
 		}
@@ -158,6 +159,32 @@ func (pr *programmer) flashOptiboot(firmware []byte, cb func(string, ...interfac
 		return fmt.Errorf("leave programming mode: %w", err)
 	}
 	return nil
+}
+
+// resetBoard pulses DTR/RTS for the Arduino auto-reset. The reset cap
+// triggers on the falling edge of DTR, so assert high first to guarantee a
+// clean high->low->high pulse regardless of the line state left on open.
+func resetBoard(p serial.Port) {
+	p.SetDTR(true)
+	p.SetRTS(true)
+	time.Sleep(50 * time.Millisecond)
+	p.SetDTR(false)
+	p.SetRTS(false)
+	time.Sleep(250 * time.Millisecond)
+	p.SetDTR(true)
+	p.SetRTS(true)
+	time.Sleep(50 * time.Millisecond)
+	p.ResetInputBuffer()
+}
+
+// validAck reports whether the GET_SYNC reply is STK500v1 or urboot for a
+// 328P/PB. Anything else is a baud mismatch or app chatter.
+func validAck(insync, ok byte) bool {
+	if insync == stkInsync && ok == stkOK {
+		return true
+	}
+	mcuid, _ := decodeUrbootInfo(insync, ok)
+	return mcuid == mcuid328P || mcuid == mcuid328PB
 }
 
 // decodeUrbootInfo extracts MCU id and feature bits from urboot's ack bytes.

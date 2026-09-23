@@ -79,3 +79,13 @@ func TestPatchVectors(t *testing.T) {
 		t.Fatal("expected error for 0x0000 reset vector")
 	}
 }
+
+func TestValidAck(t *testing.T) {
+	// 23 66 decodes to urboot MCU id 866: junk from a 57600 bootloader read at 115200.
+	if validAck(0x23, 0x66) {
+		t.Fatal("accepted junk ack")
+	}
+	if !validAck(stkInsync, stkOK) {
+		t.Fatal("rejected STK500 ack")
+	}
+}
